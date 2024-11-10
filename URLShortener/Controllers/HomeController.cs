@@ -38,8 +38,10 @@ namespace URLShortener.Controllers
             var userUrls = await _urlContext.Urls
                 .Where(u => u.UserId == userId)
                 .ToListAsync();
-
-            return View(userUrls); // Ensure userUrls is passed correctly to the view
+            // Pass the user ID along with the list of URLs to the view
+            ViewBag.UserId = userId;
+            return View(userUrls);
+            
         }
 
 

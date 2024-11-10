@@ -1,1 +1,37 @@
-﻿
+﻿@{
+    ViewData["Title"] = "My URLs";
+}
+
+<h2>Welcome, User ID: @ViewBag.UserId</h2>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Original URL</th>
+            <th>Shortened URL</th>
+            <th>Hit Count</th>
+            <th>Expiration Date</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var url in Model)
+        {
+            <tr>
+                <!-- Original URL (Clickable) -->
+                <td>
+                    <a href="@url.OriginalUrl" target="_blank" class="text-decoration-none">@url.OriginalUrl</a>
+                </td>
+
+                <!-- Shortened URL (Clickable) -->
+                <td>
+                    <a href="https://localhost:7128/@url.ShortenedCode" target="_blank" class="text-decoration-none">
+                        https://localhost:7128/@url.ShortenedCode
+                    </a>
+                </td>
+
+                <td>@url.HitCount</td>
+                <td>@url.ExpirationDate?.ToString("yyyy-MM-dd")</td>
+            </tr>
+        }
+    </tbody>
+</table>
