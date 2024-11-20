@@ -13,16 +13,65 @@
                     <form id="urlShortenerForm">
                         @Html.AntiForgeryToken()
 
-                        <!-- Original URL Input -->
+                        <!-- Original URL Input with Paste Button -->
                         <div class="mb-4">
                             <label for="originalUrl" class="form-label">URL to Shorten *</label>
-                            <input type="url"
-                                   class="form-control form-control-lg"
-                                   id="originalUrl"
-                                   name="originalUrl"
-                                   required
-                                   placeholder="https://example.com">
+                            <div class="input-group">
+                                <input type="url"
+                                       class="form-control form-control-lg"
+                                       id="originalUrl"
+                                       name="originalUrl"
+                                       required
+                                       placeholder="https://example.com">
+                                <button class="btn btn-outline-secondary" type="button" id="pasteButton">
+                                    <i class="bi bi-clipboard"></i> Paste
+                                </button>
+                            </div>
                             <div class="invalid-feedback" id="urlError"></div>
+                        </div>
+
+                        <!-- Custom Alias Input (Optional) -->
+                        <div class="mb-4">
+                            <label for="customAlias" class="form-label">
+                                Custom Alias (Optional)
+                                <i class="bi bi-question-circle"
+                                   data-bs-toggle="tooltip"
+                                   title="Create a custom short URL (e.g., 'my-link'). Leave empty for auto-generated."></i>
+                            </label>
+                            <input type="text"
+                                   class="form-control"
+                                   id="customAlias"
+                                   name="customAlias"
+                                   pattern="^[a-zA-Z0-9-_]+$"
+                                   placeholder="my-custom-link">
+                            <div class="form-text">Only letters, numbers, hyphens, and underscores allowed.</div>
+                            <div class="invalid-feedback" id="aliasError"></div>
+                        </div>
+
+                        <!-- Expiration Options -->
+                        <div class="mb-4">
+                            <label for="expiration" class="form-label">
+                                Link Expiration
+                                <i class="bi bi-question-circle"
+                                   data-bs-toggle="tooltip"
+                                   title="When should this link expire?"></i>
+                            </label>
+                            <select class="form-select" id="expiration" name="expiration">
+                                <option value="never">Never</option>
+                                <option value="1d">24 Hours</option>
+                                <option value="7d">7 Days</option>
+                                <option value="30d">30 Days</option>
+                                <option value="custom">Custom Date</option>
+                            </select>
+                        </div>
+
+                        <!-- Custom Expiration Date (hidden by default) -->
+                        <div class="mb-4 d-none" id="customExpirationContainer">
+                            <label for="customExpiration" class="form-label">Select Expiration Date</label>
+                            <input type="datetime-local"
+                                   class="form-control"
+                                   id="customExpiration"
+                                   name="customExpiration">
                         </div>
 
                         <!-- Alert Container -->
@@ -33,6 +82,12 @@
                                 </div>
                                 <div class="ms-2" id="alertMessage"></div>
                             </div>
+                        </div>
+
+                        <!-- History Section -->
+                        <div class="mb-4 d-none" id="historyContainer">
+                            <h5 class="mb-3">Recent URLs</h5>
+                            <div class="list-group" id="urlHistory"></div>
                         </div>
 
                         <!-- Submit Button -->
@@ -57,7 +112,41 @@
             const alertMessage = document.getElementById('alertMessage');
             const alertIcon = document.getElementById('alertIcon');
             const urlError = document.getElementById('urlError');
+            const aliasError = document.getElementById('aliasError');
             const originalUrlInput = document.getElementById('originalUrl');
+            const customAliasInput = document.getElementById('customAlias');
+            const expirationSelect = document.getElementById('expiration');
+            const customExpirationContainer = document.getElementById('customExpirationContainer');
+            const customExpirationInput = document.getElementById('customExpiration');
+            const pasteButton = document.getElementById('pasteButton');
+            const historyContainer = document.getElementById('historyContainer');
+            const urlHistory = document.getElementById('urlHistory');
+
+            // Initialize tooltips
+            const tooltips = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltips.map(function (tooltipTrigger) {
+                return new bootstrap.Tooltip(tooltipTrigger);
+            });
+
+            // Handle expiration select change
+            expirationSelect.addEventListener('change', function () {
+                customExpirationContainer.classList.toggle('d-none', this.value !== 'custom');
+                if (this.value === 'custom') {
+                    const tomorrow = new Date();
+                    tomorrow.setDate(tomorrow.getDate() + 1);
+                    customExpirationInput.value = tomorrow.toISOString().slice(0, 16);
+                }
+            });
+
+            // Handle paste button
+            pasteButton.addEventListener('click', async function () {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    originalUrlInput.value = text;
+                } catch (err) {
+                    showAlert('Unable to access clipboard. Please paste manually.', 'error');
+                }
+            });
 
             function showAlert(message, type = 'error') {
                 alertContainer.className = `alert ${type === 'error' ? 'alert-danger' : 'alert-success'} d-flex align-items-center`;
@@ -75,15 +164,78 @@
                 }
             }
 
+            function validateCustomAlias(alias) {
+                return /^[a-zA-Z0-9-_]*$/.test(alias);
+            }
+
+            function addToHistory(originalUrl, shortenedUrl) {
+                const history = JSON.parse(localStorage.getItem('urlHistory') || '[]');
+                history.unshift({ originalUrl, shortenedUrl, timestamp: new Date().toISOString() });
+                if (history.length > 5) history.pop();
+                localStorage.setItem('urlHistory', JSON.stringify(history));
+                updateHistoryDisplay();
+            }
+
+            function updateHistoryDisplay() {
+                const history = JSON.parse(localStorage.getItem('urlHistory') || '[]');
+                if (history.length === 0) {
+                    historyContainer.classList.add('d-none');
+                    return;
+                }
+
+                historyContainer.classList.remove('d-none');
+                urlHistory.innerHTML = history.map(item => `
+                            <div class="list-group-item">
+                                <div class="d-flex w-100 justify-content-between">
+                                    <h6 class="mb-1 text-truncate" style="max-width: 70%;">
+                                        <a href="${item.shortenedUrl}" target="_blank">${item.shortenedUrl}</a>
+                                    </h6>
+                                    <small class="text-muted">
+                                        <button class="btn btn-sm btn-outline-secondary copy-btn"
+                                                data-url="${item.shortenedUrl}">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </small>
+                                </div>
+                                <p class="mb-1 text-truncate text-muted small">${item.originalUrl}</p>
+                                <small class="text-muted">
+                                    ${new Date(item.timestamp).toLocaleString()}
+                                </small>
+                            </div>
+                        `).join('');
+
+                // Add copy button listeners
+                document.querySelectorAll('.copy-btn').forEach(btn => {
+                    btn.addEventListener('click', async function () {
+                        const url = this.dataset.url;
+                        try {
+                            await navigator.clipboard.writeText(url);
+                            this.innerHTML = '<i class="bi bi-check"></i>';
+                            setTimeout(() => {
+                                this.innerHTML = '<i class="bi bi-clipboard"></i>';
+                            }, 2000);
+                        } catch (err) {
+                            showAlert('Failed to copy URL', 'error');
+                        }
+                    });
+                });
+            }
+
+            // Initialize history display
+            updateHistoryDisplay();
+
             form.addEventListener('submit', async function (e) {
                 e.preventDefault();
 
                 // Reset previous error states
                 alertContainer.classList.add('d-none');
                 urlError.textContent = '';
+                aliasError.textContent = '';
                 originalUrlInput.classList.remove('is-invalid');
+                customAliasInput.classList.remove('is-invalid');
 
                 const originalUrl = originalUrlInput.value.trim();
+                const customAlias = customAliasInput.value.trim();
 
                 // Validate URL
                 if (!originalUrl) {
@@ -96,6 +248,22 @@
                     originalUrlInput.classList.add('is-invalid');
                     urlError.textContent = 'Please enter a valid URL (including http:// or https://)';
                     return;
+                }
+
+                // Validate custom alias if provided
+                if (customAlias && !validateCustomAlias(customAlias)) {
+                    customAliasInput.classList.add('is-invalid');
+                    aliasError.textContent = 'Custom alias can only contain letters, numbers, hyphens, and underscores';
+                    return;
+                }
+
+                // Get expiration
+                let expiration = null;
+                if (expirationSelect.value === 'custom') {
+                    expiration = new Date(customExpirationInput.value).toISOString();
+                } else if (expirationSelect.value !== 'never') {
+                    const days = parseInt(expirationSelect.value);
+                    expiration = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
                 }
 
                 // Disable submit button and show loading state
@@ -115,7 +283,11 @@
                     const response = await fetch('/api/url/shorten', {
                         method: 'POST',
                         headers: headers,
-                        body: JSON.stringify({ originalUrl })
+                        body: JSON.stringify({
+                            originalUrl,
+                            customAlias: customAlias || undefined,
+                            expiration: expiration || undefined
+                        })
                     });
 
                     if (!response.ok) {
@@ -126,12 +298,22 @@
                     const data = await response.json();
                     showAlert('URL shortened successfully!', 'success');
 
-                    // Display the shortened URL
-                    const shortenedUrl = data.shortenedUrl;
-                    alertMessage.innerHTML = `Shortened URL: <a href="${shortenedUrl}" class="alert-link" target="_blank">${shortenedUrl}</a>`;
+                    // Display the shortened URL with copy button
+                    alertMessage.innerHTML = `
+                                Shortened URL:
+                                <div class="input-group mt-2">
+                                    <input type="text" class="form-control" value="${data.shortenedUrl}" readonly>
+                                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('${data.shortenedUrl}')">
+                                        <i class="bi bi-clipboard"></i> Copy
+                                    </button>
+                                </div>`;
+
+                    // Add to history
+                    addToHistory(originalUrl, data.shortenedUrl);
 
                     // Clear form
                     form.reset();
+                    customExpirationContainer.classList.add('d-none');
 
                 } catch (error) {
                     showAlert(error.message || 'An error occurred while shortening the URL');
