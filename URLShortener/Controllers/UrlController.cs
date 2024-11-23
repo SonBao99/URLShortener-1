@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 using URLShortener.Models;
 
 [Route("")]
@@ -9,6 +10,7 @@ using URLShortener.Models;
 public class UrlController : ControllerBase
 {
     private readonly UrlContext _context;
+    private readonly Regex _aliasRegex = new Regex("^[a-zA-Z0-9-_]+$");
 
     public UrlController(UrlContext context)
     {
@@ -20,26 +22,67 @@ public class UrlController : ControllerBase
     public async Task<IActionResult> ShortenUrl([FromBody] UrlRequest request)
     {
         if (!Uri.IsWellFormedUriString(request.OriginalUrl, UriKind.Absolute))
-            return BadRequest("Invalid URL format.");
+            return BadRequest(new { message = "Invalid URL format." });
 
-        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier); // Get current user's ID
-        var shortCode = await GenerateUniqueShortCodeAsync();
+        // Validate and process custom alias
+        string shortCode;
+        if (!string.IsNullOrEmpty(request.CustomAlias))
+        {
+            if (!_aliasRegex.IsMatch(request.CustomAlias))
+                return BadRequest(new { message = "Custom alias can only contain letters, numbers, hyphens, and underscores." });
 
-        var expirationDate = DateTime.UtcNow.AddDays(30); // Set default expiration to 30 days
+            if (await _context.Urls.AnyAsync(u => u.ShortenedCode == request.CustomAlias))
+                return BadRequest(new { message = "This custom alias is already in use." });
+
+            shortCode = request.CustomAlias;
+        }
+        else
+        {
+            shortCode = await GenerateUniqueShortCodeAsync();
+        }
+
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        // Process expiration date
+        DateTime? expirationDate = null;
+        if (request.Expiration.HasValue)
+        {
+            if (request.Expiration.Value <= DateTime.UtcNow)
+                return BadRequest(new { message = "Expiration date must be in the future." });
+
+            expirationDate = request.Expiration.Value;
+        }
 
         var url = new Url
         {
             OriginalUrl = request.OriginalUrl,
             ShortenedCode = shortCode,
             CreatedAt = DateTime.UtcNow,
-            ExpirationDate = expirationDate, // Set expiration
-            UserId = userId // Assign the current user's ID
+            ExpirationDate = expirationDate,
+            UserId = userId,
+            HitCount = 0
         };
 
-        _context.Urls.Add(url);
-        await _context.SaveChangesAsync();
+        try
+        {
+            _context.Urls.Add(url);
+            await _context.SaveChangesAsync();
 
-        return Ok(new { ShortenedUrl = $"{Request.Scheme}://{Request.Host}/{shortCode}" });
+            return Ok(new
+            {
+                shortenedUrl = $"{Request.Scheme}://{Request.Host}/{shortCode}",
+                expiresAt = url.ExpirationDate
+            });
+        }
+        catch (DbUpdateException)
+        {
+            // Handle potential race condition with custom aliases
+            if (!string.IsNullOrEmpty(request.CustomAlias))
+                return BadRequest(new { message = "This custom alias is already in use." });
+
+            // For auto-generated codes, try again
+            return await ShortenUrl(request);
+        }
     }
 
     // GET /{shortCode} - catch-all route for redirection
@@ -47,27 +90,20 @@ public class UrlController : ControllerBase
     public async Task<IActionResult> RedirectToOriginalUrl(string shortCode)
     {
         if (string.IsNullOrEmpty(shortCode))
-            return BadRequest("Short code cannot be empty.");
+            return BadRequest(new { message = "Short code cannot be empty." });
 
         var url = await _context.Urls.AsNoTracking()
             .FirstOrDefaultAsync(u => u.ShortenedCode == shortCode);
 
         if (url == null)
-            return NotFound("URL not found.");
+            return NotFound(new { message = "URL not found." });
 
         // Check if the URL has expired
         if (url.ExpirationDate.HasValue && url.ExpirationDate.Value < DateTime.UtcNow)
-        {
-            return BadRequest("This URL has expired.");
-        }
+            return BadRequest(new { message = "This URL has expired." });
 
-        if (url.UserId == null)
-        {
-            // Handle guest user scenario or log the missing UserId
-            // Proceed with redirection even if UserId is null
-        }
-
-        await UpdateHitCount(shortCode);
+        // Update hit count asynchronously - don't wait for it to complete
+        _ = UpdateHitCount(shortCode);
 
         return Redirect(url.OriginalUrl);
     }
@@ -75,12 +111,15 @@ public class UrlController : ControllerBase
     private async Task<string> GenerateUniqueShortCodeAsync()
     {
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        const int codeLength = 6;
         var random = new Random();
         string shortCode;
 
         do
         {
-            shortCode = new string(Enumerable.Repeat(chars, 6).Select(s => s[random.Next(s.Length)]).ToArray());
+            shortCode = new string(Enumerable.Repeat(chars, codeLength)
+                .Select(s => s[random.Next(s.Length)])
+                .ToArray());
         }
         while (await _context.Urls.AnyAsync(u => u.ShortenedCode == shortCode));
 
@@ -89,12 +128,16 @@ public class UrlController : ControllerBase
 
     private async Task UpdateHitCount(string shortCode)
     {
-        var url = await _context.Urls.FirstOrDefaultAsync(u => u.ShortenedCode == shortCode);
-
-        if (url != null)
+        try
         {
-            url.HitCount++;
-            await _context.SaveChangesAsync();
+            await _context.Urls
+                .Where(u => u.ShortenedCode == shortCode)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(u => u.HitCount, u => u.HitCount + 1));
+        }
+        catch
+        {
+            // Log the error but don't fail the request
         }
     }
 }
